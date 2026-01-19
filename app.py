@@ -8,9 +8,24 @@ import streamlit as st
 
 
 # ----------------------------
+# MUST BE FIRST Streamlit call
+# ----------------------------
+st.set_page_config(page_title="Correct Score Predictor (Entertainment Mode)", layout="wide")
+
+st.title("Correct Score Predictor (Entertainment Mode)")
+st.write("More lively correct scores using xG + goals/points + full odds logic (for entertainment, still grounded).")
+
+# ✅ Put uploader right here so it ALWAYS renders
+uploaded = st.file_uploader("Upload FootyStats CSV", type=["csv"])
+
+if uploaded is None:
+    st.info("Upload your CSV to generate predictions.")
+    st.stop()
+
+
+# ----------------------------
 # Utilities
 # ----------------------------
-
 def safe_float(x) -> Optional[float]:
     try:
         if pd.isna(x):
@@ -24,7 +39,6 @@ def safe_float(x) -> Optional[float]:
 
 
 def parse_date_time(date_val, time_val) -> Tuple[str, str]:
-    # Date
     date_out = ""
     if isinstance(date_val, (datetime, pd.Timestamp)):
         date_out = date_val.strftime("%b %d %Y")
@@ -40,7 +54,6 @@ def parse_date_time(date_val, time_val) -> Tuple[str, str]:
         if not date_out:
             date_out = s
 
-    # Time
     time_out = ""
     if isinstance(time_val, (datetime, pd.Timestamp)):
         time_out = time_val.strftime("%-I:%M %p") if hasattr(time_val, "strftime") else str(time_val)
@@ -67,10 +80,6 @@ def find_column(df: pd.DataFrame, candidates) -> Optional[str]:
 
 
 def parse_footystats_date_gmt(value) -> Tuple[str, str]:
-    """
-    Input like: 'Jan 18 2026 - 1:00pm'
-    Output: ('Jan 18 2026', '1:00 PM')
-    """
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return "", ""
 
@@ -140,27 +149,14 @@ def build_score_matrix(lam_h: float, lam_a: float, max_goals: int) -> np.ndarray
     return p
 
 
-def pick_score_entertaining(
-    p: np.ndarray,
-    adventurousness: float,
-    temperature: float,
-    seed: int
-) -> Tuple[int, int]:
-    """
-    - temperature > 1 flattens distribution -> more variety
-    - adventurousness biases toward higher total goals
-    """
+def pick_score_entertaining(p: np.ndarray, adventurousness: float, temperature: float, seed: int) -> Tuple[int, int]:
     rng = np.random.default_rng(seed)
 
-    # Temperature transform
-    # (higher T => more flat). Using power alpha = 1/T
     T = max(0.6, float(temperature))
     alpha = 1.0 / T
     w = np.power(np.clip(p, 1e-12, 1.0), alpha)
 
-    # Adventure bias toward higher totals
-    # multiplier exp(k*(i+j))
-    k = 0.35 * float(adventurousness)  # 0..0.35
+    k = 0.35 * float(adventurousness)
     if k > 0:
         max_i, max_j = w.shape[0] - 1, w.shape[1] - 1
         for i in range(max_i + 1):
@@ -207,24 +203,12 @@ def compute_lambdas_from_features(
     tilt_weight: float,
     btts_weight: float,
 ) -> Tuple[float, float]:
-    """
-    Build lambdas using:
-    - xG base
-    - avg goals scored + conceded (if present)
-    - points tilt (if present)
-    - market total goals anchor (O/U 2.5)
-    - market tilt anchor (1X2)
-    - BTTS nudges away from sterile low-score shapes
-    """
 
-    # --- base from xG ---
     xg_h = safe_float(r.get(col_xg_h)) or 0.0
     xg_a = safe_float(r.get(col_xg_a)) or 0.0
     lam_h = max(0.05, xg_h)
     lam_a = max(0.05, xg_a)
 
-    # --- add “form-like” goals info if available ---
-    # Home attack + Away defense
     parts_h = []
     if col_h_gf:
         v = safe_float(r.get(col_h_gf))
@@ -235,7 +219,6 @@ def compute_lambdas_from_features(
         if v is not None:
             parts_h.append(v)
 
-    # Away attack + Home defense
     parts_a = []
     if col_a_gf:
         v = safe_float(r.get(col_a_gf))
@@ -251,21 +234,17 @@ def compute_lambdas_from_features(
     if parts_a:
         lam_a = (w_xg * lam_a) + (w_goals * (sum(parts_a) / len(parts_a)))
 
-    # --- points tilt (small, just to push one side up a bit) ---
     if col_h_pts and col_a_pts:
         hp = safe_float(r.get(col_h_pts))
         ap = safe_float(r.get(col_a_pts))
         if hp is not None and ap is not None:
-            # normalize by a typical range (0..90-ish season points)
-            diff = (hp - ap) / 30.0  # conservative
-            diff = clamp(diff, -1.0, 1.0) * points_tilt  # points_tilt slider
-            # increase home and reduce away slightly, then renormalize later
+            diff = (hp - ap) / 30.0
+            diff = clamp(diff, -1.0, 1.0) * points_tilt
             lam_h *= (1.0 + 0.12 * diff)
             lam_a *= (1.0 - 0.12 * diff)
             lam_h = max(0.02, lam_h)
             lam_a = max(0.02, lam_a)
 
-    # --- market total goals anchor from O/U 2.5 ---
     p_over = odds_to_prob(over25_odds)
     p_under = odds_to_prob(under25_odds)
     if p_over is not None and p_under is not None:
@@ -279,7 +258,6 @@ def compute_lambdas_from_features(
         lam_h *= scale
         lam_a *= scale
 
-    # --- 1X2 tilt anchor (who gets more of the goals) ---
     pH = odds_to_prob(home_odds)
     pD = odds_to_prob(draw_odds)
     pA = odds_to_prob(away_odds)
@@ -297,33 +275,180 @@ def compute_lambdas_from_features(
             lam_h *= lam_total / new_total
             lam_a *= lam_total / new_total
 
-    # --- BTTS logic nudges away from “too many 1-0/0-1/1-1” if BTTS Yes is strong ---
-    # We do this by gently increasing both lambdas when market likes BTTS Yes.
     by = odds_to_prob(btts_yes_odds)
     bn = odds_to_prob(btts_no_odds)
     if by is not None and bn is not None:
         probs = overround_normalize({"yes": by, "no": bn})
         p_yes = probs["yes"]
-        # map p_yes in [0.35..0.70] to a multiplier range ~[0.95..1.12]
         mult = 1.0 + (clamp(p_yes, 0.35, 0.70) - 0.50) * 0.55
         mult = (1 - btts_weight) * 1.0 + btts_weight * mult
         lam_h *= mult
         lam_a *= mult
 
-    # Final clamps
     lam_h = clamp(lam_h, 0.05, 4.5)
     lam_a = clamp(lam_a, 0.05, 4.5)
     return lam_h, lam_a
 
 
 # ----------------------------
-# Streamlit UI
+# Sidebar controls (after uploader)
 # ----------------------------
-
-st.set_page_config(page_title="Correct Score Predictor (Entertainment Mode)", layout="wide")
-st.title("Correct Score Predictor (Entertainment Mode)")
-st.write("More lively correct scores using xG + goals/points + full odds logic (for entertainment, still grounded).")
-
 with st.sidebar:
     st.header("Style controls")
     adventurousness = st.slider("Adventurousness (push to higher totals)", 0.0, 1.0, 0.55, 0.05)
+    temperature = st.slider("Variety (temperature)", 0.7, 2.0, 1.25, 0.05)
+    max_goals = st.slider("Max goals considered per team", 4, 10, 7, 1)
+
+    st.divider()
+    st.header("Feature blending")
+    w_xg = st.slider("Weight on xG", 0.0, 1.0, 0.60, 0.05)
+    w_goals = 1.0 - w_xg
+    points_tilt = st.slider("Points tilt strength", 0.0, 1.0, 0.35, 0.05)
+
+    st.divider()
+    st.header("Market anchors")
+    use_market = st.checkbox("Use market anchors", value=True)
+    totals_weight = st.slider("Totals anchor (O/U 2.5) strength", 0.0, 1.0, 0.80, 0.05)
+    tilt_weight = st.slider("1X2 tilt strength", 0.0, 1.0, 0.60, 0.05)
+    btts_weight = st.slider("BTTS influence (if BTTS odds exist)", 0.0, 1.0, 0.65, 0.05)
+
+# ----------------------------
+# Load data (after uploader)
+# ----------------------------
+df = pd.read_csv(uploaded)
+
+# Core columns
+COL_COUNTRY = "Country"
+COL_LEAGUE = "League"
+COL_HOME = "Home Team"
+COL_AWAY = "Away Team"
+COL_XG_H = "Home Team Pre-Match xG"
+COL_XG_A = "Away Team Pre-Match xG"
+
+# Date/time candidates
+DATE_CANDIDATES = ["Date", "Match Date", "Match_Date", "Date GMT", "Match Date GMT"]
+TIME_CANDIDATES = ["Time", "Match Time", "Match_Time", "Time GMT", "Match Time GMT"]
+DATETIME_CANDIDATES = ["date_GMT", "Date_GMT", "DateTime", "Datetime", "Date Time", "Match DateTime", "Match Datetime"]
+
+col_date = find_column(df, DATE_CANDIDATES)
+col_time = find_column(df, TIME_CANDIDATES)
+col_dt = find_column(df, DATETIME_CANDIDATES)
+
+# Optional odds columns
+COL_O25 = "Odds_Over25"
+COL_U25 = "Odds_Under25"
+COL_H = "Odds_Home_Win"
+COL_D = "Odds_Draw"
+COL_A = "Odds_Away_Win"
+
+# BTTS candidates
+BTTS_YES_CANDS = ["Odds_BTTS_Yes", "Odds_BothTeamsToScore_Yes", "Odds_BTTSYes", "BTTS Yes Odds"]
+BTTS_NO_CANDS = ["Odds_BTTS_No", "Odds_BothTeamsToScore_No", "Odds_BTTSNo", "BTTS No Odds"]
+COL_BTTS_Y = find_column(df, BTTS_YES_CANDS)
+COL_BTTS_N = find_column(df, BTTS_NO_CANDS)
+
+# Goals + conceded + points candidates
+HOME_GF_CANDS = ["Home Avg Goals Scored", "Home Team Avg Goals Scored", "home_goals_for_avg"]
+AWAY_GA_CANDS = ["Away Avg Goals Conceded", "Away Team Avg Goals Conceded", "away_goals_against_avg"]
+AWAY_GF_CANDS = ["Away Avg Goals Scored", "Away Team Avg Goals Scored", "away_goals_for_avg"]
+HOME_GA_CANDS = ["Home Avg Goals Conceded", "Home Team Avg Goals Conceded", "home_goals_against_avg"]
+HOME_PTS_CANDS = ["Home Points", "Home Team Points", "home_points", "Home Team Pre-Match Points"]
+AWAY_PTS_CANDS = ["Away Points", "Away Team Points", "away_points", "Away Team Pre-Match Points"]
+
+COL_H_GF = find_column(df, HOME_GF_CANDS)
+COL_A_GA = find_column(df, AWAY_GA_CANDS)
+COL_A_GF = find_column(df, AWAY_GF_CANDS)
+COL_H_GA = find_column(df, HOME_GA_CANDS)
+COL_H_PTS = find_column(df, HOME_PTS_CANDS)
+COL_A_PTS = find_column(df, AWAY_PTS_CANDS)
+
+# Validate required columns
+has_date_time = (col_date is not None and col_time is not None) or (col_dt is not None)
+missing_required = []
+if not has_date_time:
+    missing_required.append("Date/Time (need Date+Time OR date_GMT)")
+for c in [COL_COUNTRY, COL_LEAGUE, COL_HOME, COL_AWAY, COL_XG_H, COL_XG_A]:
+    if c not in df.columns:
+        missing_required.append(c)
+
+if missing_required:
+    st.error(f"Missing required columns: {missing_required}")
+    st.write("Detected columns:", list(df.columns))
+    st.stop()
+
+rows_out = []
+for idx, r in df.iterrows():
+    xg_h = safe_float(r.get(COL_XG_H))
+    xg_a = safe_float(r.get(COL_XG_A))
+    if xg_h is None or xg_a is None:
+        continue
+
+    over25_odds = safe_float(r.get(COL_O25)) if use_market else None
+    under25_odds = safe_float(r.get(COL_U25)) if use_market else None
+    home_odds = safe_float(r.get(COL_H)) if use_market else None
+    draw_odds = safe_float(r.get(COL_D)) if use_market else None
+    away_odds = safe_float(r.get(COL_A)) if use_market else None
+
+    btts_yes_odds = safe_float(r.get(COL_BTTS_Y)) if (use_market and COL_BTTS_Y) else None
+    btts_no_odds = safe_float(r.get(COL_BTTS_N)) if (use_market and COL_BTTS_N) else None
+
+    lam_h, lam_a = compute_lambdas_from_features(
+        r=r,
+        col_xg_h=COL_XG_H,
+        col_xg_a=COL_XG_A,
+        col_h_gf=COL_H_GF,
+        col_a_ga=COL_A_GA,
+        col_a_gf=COL_A_GF,
+        col_h_ga=COL_H_GA,
+        col_h_pts=COL_H_PTS,
+        col_a_pts=COL_A_PTS,
+        over25_odds=over25_odds,
+        under25_odds=under25_odds,
+        home_odds=home_odds,
+        draw_odds=draw_odds,
+        away_odds=away_odds,
+        btts_yes_odds=btts_yes_odds,
+        btts_no_odds=btts_no_odds,
+        w_xg=w_xg,
+        w_goals=w_goals,
+        points_tilt=points_tilt,
+        totals_weight=totals_weight,
+        tilt_weight=tilt_weight,
+        btts_weight=btts_weight,
+    )
+
+    p = build_score_matrix(lam_h, lam_a, max_goals=max_goals)
+    seed = int((idx + 1) * 10007)
+    hg, ag = pick_score_entertaining(p, adventurousness, temperature, seed)
+
+    if col_dt is not None:
+        date_str, time_str = parse_footystats_date_gmt(r.get(col_dt))
+    else:
+        date_str, time_str = parse_date_time(r.get(col_date), r.get(col_time))
+
+    rows_out.append({
+        "Date": date_str,
+        "Time": time_str,
+        "Country": str(r.get(COL_COUNTRY)),
+        "League": str(r.get(COL_LEAGUE)),
+        "Home Team": str(r.get(COL_HOME)),
+        "Home Prediction": int(hg),
+        "Away Prediction": int(ag),
+        "Away Team": str(r.get(COL_AWAY)),
+    })
+
+out = pd.DataFrame(rows_out)
+
+st.subheader("Predictions")
+st.dataframe(out, use_container_width=True)
+
+st.subheader("Copy/paste into Google Sheets")
+tsv = out.to_csv(sep="\t", index=False)
+st.text_area("TSV (Ctrl/Cmd+A then copy)", tsv, height=220)
+
+st.download_button(
+    "Download CSV",
+    data=out.to_csv(index=False).encode("utf-8"),
+    file_name="correct_score_predictions.csv",
+    mime="text/csv",
+)
