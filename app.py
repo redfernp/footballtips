@@ -145,6 +145,12 @@ if "date_unix" in df.columns:
     df = df[df["date_unix"].notna() & (df["date_unix"].astype(str).str.strip() != "")]
     df = df[~df["date_unix"].astype(str).str.startswith("#")]
 
+# Filter: only include games where all key odds columns are present and > 0.1
+ODDS_FILTER_COLS = ["Odds_Home_Win", "Odds_BTTS_Yes", "Odds_Over15", "Odds_Over25"]
+present_odds_cols = [c for c in ODDS_FILTER_COLS if c in df.columns]
+for col in present_odds_cols:
+    df = df[pd.to_numeric(df[col], errors="coerce").fillna(0) > 0.1]
+
 DATE_CANDIDATES = ["Date", "Match Date", "Match_Date", "Date GMT", "Match Date GMT"]
 TIME_CANDIDATES = ["Time", "Match Time", "Match_Time", "Time GMT", "Match Time GMT"]
 DATETIME_CANDIDATES = ["date_GMT", "Date_GMT", "DateTime", "Datetime", "Date Time", "Match DateTime", "Match Datetime"]
@@ -153,6 +159,12 @@ col_date = find_column(df, DATE_CANDIDATES)
 col_time = find_column(df, TIME_CANDIDATES)
 col_dt = find_column(df, DATETIME_CANDIDATES)
 
+# Sort games by date/time ascending
+if "date_unix" in df.columns:
+    df = df.sort_values("date_unix", ascending=True).reset_index(drop=True)
+elif col_dt is not None:
+    df = df.sort_values(col_dt, ascending=True).reset_index(drop=True)
+
 COL_COUNTRY = "Country"
 COL_LEAGUE = "League"
 COL_HOME = "Home Team"
@@ -160,6 +172,178 @@ COL_AWAY = "Away Team"
 
 BASE_COLS = [COL_COUNTRY, COL_LEAGUE, COL_HOME, COL_AWAY]
 has_date_time = (col_date is not None and col_time is not None) or (col_dt is not None)
+
+# ----------------------------
+# League Filters
+# ----------------------------
+TOP_LEAGUES = [
+    # UEFA club competitions
+    ("Europe", "UEFA Champions League"),
+    ("Europe", "UEFA Europa League"),
+    ("Europe", "UEFA Europa Conference League"),
+    # Big 5 + top European leagues
+    ("England", "Premier League"),
+    ("Spain", "La Liga"),
+    ("Germany", "Bundesliga"),
+    ("France", "Ligue 1"),
+    ("Italy", "Serie A"),
+    ("Portugal", "Liga NOS"),
+    ("Netherlands", "Eredivisie"),
+    ("Belgium", "Pro League"),
+    ("Turkey", "Süper Lig"),
+    ("Scotland", "Premiership"),
+    # Americas
+    ("Brazil", "Serie A"),
+    ("Argentina", "Primera División"),
+    ("Mexico", "Liga MX"),
+    ("USA", "MLS"),
+    # Asia / Rest of World
+    ("Russia", "Russian Premier League"),
+    ("Japan", "J1 League"),
+    ("South Korea", "K League 1"),
+]
+
+TOP_AND_SECOND_TIER = TOP_LEAGUES + [
+    # --- 2nd tiers of big leagues ---
+    ("England", "Championship"),
+    ("Germany", "2. Bundesliga"),
+    ("Spain", "Segunda División"),
+    ("France", "Ligue 2"),
+    ("Italy", "Serie B"),
+    ("Portugal", "LigaPro"),
+    ("Netherlands", "Eerste Divisie"),
+    ("Belgium", "First Division B"),
+    ("Turkey", "1. Lig"),
+    ("Scotland", "Championship"),
+    ("Brazil", "Serie B"),
+    ("Argentina", "Prim B Nacional"),
+    ("Mexico", "Ascenso MX"),
+    ("Russia", "FNL"),
+    ("Japan", "J2 League"),
+    ("South Korea", "K League 2"),
+    # --- Top flights of second-tier European countries ---
+    ("Austria", "Bundesliga"),
+    ("Switzerland", "Super League"),
+    ("Denmark", "Superliga"),
+    ("Norway", "Eliteserien"),
+    ("Sweden", "Allsvenskan"),
+    ("Finland", "Veikkausliiga"),
+    ("Republic of Ireland", "Premier Division"),
+    ("Greece", "Super League"),
+    ("Croatia", "Prva HNL"),
+    ("Czech Republic", "First League"),
+    ("Poland", "Ekstraklasa"),
+    ("Romania", "Liga I"),
+    ("Serbia", "SuperLiga"),
+    ("Hungary", "NB I"),
+    ("Slovakia", "Super Liga"),
+    ("Bulgaria", "First League"),
+    ("Israel", "Israeli Premier League"),
+    ("Cyprus", "First Division"),
+    ("Slovenia", "PrvaLiga"),
+    ("Kazakhstan", "Kazakhstan Premier League"),
+    ("Azerbaijan", "Premyer Liqası"),
+    # --- Top flights of notable non-European countries ---
+    ("Saudi Arabia", "Professional League"),
+    ("Qatar", "Stars League"),
+    ("UAE", "Arabian Gulf League"),
+    ("China", "Chinese Super League"),
+    ("Australia", "A-League"),
+    ("Thailand", "Thai League T1"),
+    ("Indonesia", "Liga 1"),
+    ("South Africa", "Premier Soccer League"),
+    ("Egypt", "Egyptian Premier League"),
+    ("Chile", "Primera División"),
+    ("Colombia", "Categoria Primera A"),
+    ("Peru", "Primera División"),
+    ("Ecuador", "Primera Categoría Serie A"),
+    ("Paraguay", "Division Profesional"),
+    # --- International competitions ---
+    ("International", "International Friendlies"),
+    ("International", "WC Qualification Europe"),
+    ("International", "WC Qualification Africa"),
+    ("International", "WC Qualification Asia"),
+    ("International", "WC Qualification CONCACAF"),
+    ("International", "Africa Cup of Nations"),
+    ("International", "CONCACAF Champions League"),
+    ("International", "FIFA World Cup U20"),
+    ("Asia", "AFC Champions League"),
+    ("Asia", "AFC Cup"),
+    ("Africa", "CAF Confederations Cup"),
+    ("South America", "Copa Libertadores"),
+    ("South America", "Copa Sudamericana"),
+    ("Europe", "UEFA U21 Championship Qualification"),
+]
+
+# Big Betting Competitions: all UK leagues + top league + cups from Spain/Italy/Germany/France/Netherlands + UEFA + all internationals
+BIG_BETTING_COUNTRIES = ["England", "Scotland"]  # all leagues from these countries
+BIG_BETTING_SPECIFIC = [
+    # UEFA club competitions
+    ("Europe", "UEFA Champions League"),
+    ("Europe", "UEFA Europa League"),
+    ("Europe", "UEFA Europa Conference League"),
+    ("Europe", "UEFA U21 Championship Qualification"),
+    # Spain - top league + cup
+    ("Spain", "La Liga"),
+    ("Spain", "Copa del Rey"),
+    # Italy - top league + cup
+    ("Italy", "Serie A"),
+    ("Italy", "Coppa Italia"),
+    # Germany - top league + cup
+    ("Germany", "Bundesliga"),
+    ("Germany", "DFB Pokal"),
+    # France - top league + cup
+    ("France", "Ligue 1"),
+    ("France", "Coupe de France"),
+    # Netherlands - top league + cup
+    ("Netherlands", "Eredivisie"),
+    ("Netherlands", "KNVB Cup"),
+    # All international competitions
+    ("International", "International Friendlies"),
+    ("International", "WC Qualification Europe"),
+    ("International", "WC Qualification Africa"),
+    ("International", "WC Qualification Asia"),
+    ("International", "WC Qualification CONCACAF"),
+    ("International", "Africa Cup of Nations"),
+    ("International", "CONCACAF Champions League"),
+    ("International", "FIFA World Cup U20"),
+    ("Asia", "AFC Champions League"),
+    ("Asia", "AFC Cup"),
+    ("Africa", "CAF Confederations Cup"),
+    ("South America", "Copa Libertadores"),
+    ("South America", "Copa Sudamericana"),
+]
+
+league_filter = st.sidebar.radio(
+    "League filter",
+    ["All Leagues", "Top Leagues only", "Top + 2nd Tier Leagues + Internationals", "Big Betting Competitions"],
+    index=1,
+)
+
+if league_filter == "Top Leagues only":
+    mask = pd.Series(False, index=df.index)
+    for country, league in TOP_LEAGUES:
+        mask |= (df[COL_COUNTRY] == country) & (df[COL_LEAGUE] == league)
+    df = df[mask].reset_index(drop=True)
+    if df.empty:
+        st.warning("No matches found for top leagues in this CSV.")
+        st.stop()
+elif league_filter == "Top + 2nd Tier Leagues + Internationals":
+    mask = pd.Series(False, index=df.index)
+    for country, league in TOP_AND_SECOND_TIER:
+        mask |= (df[COL_COUNTRY] == country) & (df[COL_LEAGUE] == league)
+    df = df[mask].reset_index(drop=True)
+    if df.empty:
+        st.warning("No matches found for selected leagues in this CSV.")
+        st.stop()
+elif league_filter == "Big Betting Competitions":
+    mask = df[COL_COUNTRY].isin(BIG_BETTING_COUNTRIES)
+    for country, league in BIG_BETTING_SPECIFIC:
+        mask |= (df[COL_COUNTRY] == country) & (df[COL_LEAGUE] == league)
+    df = df[mask].reset_index(drop=True)
+    if df.empty:
+        st.warning("No matches found for Big Betting Competitions in this CSV.")
+        st.stop()
 
 missing_base = []
 if not has_date_time:
@@ -469,11 +653,14 @@ with tab_1x2:
                 return "NO TIP", None
 
             if home_ppg > 2.4:
-                return "HOME WIN", safe_float(r.get("Odds_Home_Win"))
+                odds = safe_float(r.get("Odds_Home_Win"))
+                return ("NO TIP", None) if odds is None or odds >= 4.0 else ("HOME WIN", odds)
             elif away_ppg > 2.5:
-                return "AWAY WIN", safe_float(r.get("Odds_Away_Win"))
+                odds = safe_float(r.get("Odds_Away_Win"))
+                return ("NO TIP", None) if odds is None or odds >= 4.0 else ("AWAY WIN", odds)
             elif home_ppg == away_ppg:
-                return "DRAW", safe_float(r.get("Odds_Draw"))
+                odds = safe_float(r.get("Odds_Draw"))
+                return ("NO TIP", None) if odds is None or odds >= 4.0 else ("DRAW", odds)
             else:
                 return "NO TIP", None
 
