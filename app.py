@@ -327,7 +327,7 @@ BIG_BETTING_COMPETITIONS = [
 
 league_filter = st.sidebar.radio(
     "League filter",
-    ["All Leagues", "Top Leagues only", "Top + 2nd Tier Leagues + Internationals", "Big Betting Competitions"],
+    ["All Leagues", "Top Leagues only", "Big Betting Competitions", "Top + 2nd Tier Leagues + Internationals"],
     index=1,
 )
 
