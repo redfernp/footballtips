@@ -275,14 +275,20 @@ TOP_AND_SECOND_TIER = TOP_LEAGUES + [
     ("Europe", "UEFA U21 Championship Qualification"),
 ]
 
-# Big Betting Competitions: all UK leagues + top league + cups from Spain/Italy/Germany/France/Netherlands + UEFA + all internationals
-BIG_BETTING_COUNTRIES = ["England", "Scotland"]  # all leagues from these countries
-BIG_BETTING_SPECIFIC = [
-    # UEFA club competitions
-    ("Europe", "UEFA Champions League"),
-    ("Europe", "UEFA Europa League"),
-    ("Europe", "UEFA Europa Conference League"),
-    ("Europe", "UEFA U21 Championship Qualification"),
+BIG_BETTING_COMPETITIONS = [
+    # England - top 4 leagues + cups
+    ("England", "Premier League"),
+    ("England", "Championship"),
+    ("England", "EFL League One"),
+    ("England", "EFL League Two"),
+    ("England", "FA Cup"),
+    ("England", "League Cup"),
+    ("England", "EFL Trophy"),
+    # Scotland - top 2 leagues + cups
+    ("Scotland", "Premiership"),
+    ("Scotland", "Championship"),
+    ("Scotland", "Scottish League Cup"),
+    ("Scotland", "Challenge Cup"),
     # Spain - top league + cup
     ("Spain", "La Liga"),
     ("Spain", "Copa del Rey"),
@@ -298,6 +304,11 @@ BIG_BETTING_SPECIFIC = [
     # Netherlands - top league + cup
     ("Netherlands", "Eredivisie"),
     ("Netherlands", "KNVB Cup"),
+    # UEFA club competitions
+    ("Europe", "UEFA Champions League"),
+    ("Europe", "UEFA Europa League"),
+    ("Europe", "UEFA Europa Conference League"),
+    ("Europe", "UEFA U21 Championship Qualification"),
     # All international competitions
     ("International", "International Friendlies"),
     ("International", "WC Qualification Europe"),
@@ -337,8 +348,8 @@ elif league_filter == "Top + 2nd Tier Leagues + Internationals":
         st.warning("No matches found for selected leagues in this CSV.")
         st.stop()
 elif league_filter == "Big Betting Competitions":
-    mask = df[COL_COUNTRY].isin(BIG_BETTING_COUNTRIES)
-    for country, league in BIG_BETTING_SPECIFIC:
+    mask = pd.Series(False, index=df.index)
+    for country, league in BIG_BETTING_COMPETITIONS:
         mask |= (df[COL_COUNTRY] == country) & (df[COL_LEAGUE] == league)
     df = df[mask].reset_index(drop=True)
     if df.empty:
