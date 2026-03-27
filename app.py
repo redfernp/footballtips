@@ -122,7 +122,9 @@ def get_date_time(r: pd.Series, col_dt, col_date, col_time) -> Tuple[str, str]:
 def make_tsv_block(df: pd.DataFrame, label: str):
     st.subheader(f"Copy/paste {label} into Google Sheets")
     tsv = df.to_csv(sep="\t", index=False)
-    st.text_area("TSV (Ctrl/Cmd+A then copy)", tsv, height=200, key=f"tsv_{label}")
+    key = f"tsv_{label}"
+    st.session_state[key] = tsv
+    st.text_area("TSV (Ctrl/Cmd+A then copy)", height=200, key=key)
 
 
 def make_download_button(df: pd.DataFrame, filename: str, label: str):
