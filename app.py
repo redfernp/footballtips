@@ -51,6 +51,69 @@ def find_column(df: pd.DataFrame, candidates) -> Optional[str]:
     return None
 
 
+def implied_probs_1x2(oh, od, oa):
+    """De-vig 1X2 decimal odds into (p_home, p_draw, p_away). None if unusable."""
+    vals = [oh, od, oa]
+    if any(v is None or v <= 0 for v in vals):
+        return None
+    ih, idr, ia = 1.0 / oh, 1.0 / od, 1.0 / oa
+    s = ih + idr + ia
+    if s <= 0:
+        return None
+    return ih / s, idr / s, ia / s
+
+
+def _poisson_p_ge3(mu: float) -> float:
+    """P(X >= 3) for a Poisson with mean mu."""
+    return 1.0 - math.exp(-mu) * (1.0 + mu + (mu * mu) / 2.0)
+
+
+def mu_total_from_over_under(o_over, o_under, default: float = 2.6) -> float:
+    """Expected total goals implied by Over/Under 2.5 odds, via Poisson inversion."""
+    p_over = None
+    if o_over is not None and o_under is not None and o_over > 0 and o_under > 0:
+        io, iu = 1.0 / o_over, 1.0 / o_under
+        p_over = io / (io + iu)
+    elif o_over is not None and o_over > 0:
+        p_over = min(0.99, 1.0 / o_over)
+
+    if p_over is None:
+        return default
+
+    p_over = min(max(p_over, 0.001), 0.999)
+    lo, hi = 0.05, 7.0
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if _poisson_p_ge3(mid) < p_over:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
+
+
+def correct_score_from_odds(oh, od, oa, o_over, o_under):
+    """Odds-based fallback scoreline when xG / PPG inputs are unavailable.
+
+    Splits the odds-implied total goals expectancy across the two teams using
+    their de-vigged win probabilities (draw weight split evenly). Returns
+    (home_goals, away_goals) or None if 1X2 odds are missing.
+    """
+    probs = implied_probs_1x2(oh, od, oa)
+    if probs is None:
+        return None
+    p_h, p_d, p_a = probs
+    mu_total = mu_total_from_over_under(o_over, o_under)
+
+    strength_home = p_h + 0.5 * p_d
+    strength_away = p_a + 0.5 * p_d
+    mu_home = mu_total * strength_home
+    mu_away = mu_total * strength_away
+
+    hg = max(0, min(10, round_half_up(mu_home)))
+    ag = max(0, min(10, round_half_up(mu_away)))
+    return hg, ag
+
+
 def parse_footystats_date_gmt(value) -> Tuple[str, str]:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return "", ""
@@ -388,14 +451,21 @@ tab_correct, tab_btts, tab_over15, tab_over25, tab_1x2 = st.tabs([
 # ============================================================
 with tab_correct:
     st.header("Correct Score Predictions")
-    st.caption("Formula: Home Goals = round((Home PPG × Home xG) / Odds_Home_Win), same for away.")
+    st.caption(
+        "Primary: Home Goals = round((Home PPG × Home xG) / Odds_Home_Win), same for away. "
+        "Fallback (when xG / PPG are unavailable, e.g. World Cup & internationals): "
+        "scoreline derived from Over/Under 2.5 and 1X2 odds."
+    )
 
     COL_HOME_PPG_CURR = "Home Team Points Per Game (Current)"
     COL_AWAY_PPG_CURR = "Away Team Points Per Game (Current)"
     COL_XG_H = "Home Team Pre-Match xG"
     COL_XG_A = "Away Team Pre-Match xG"
     COL_OH = "Odds_Home_Win"
+    COL_OD = "Odds_Draw"
     COL_OA = "Odds_Away_Win"
+    COL_OVER25 = "Odds_Over25"
+    COL_UNDER25 = "Odds_Under25"
 
     cs_missing = [c for c in [COL_HOME_PPG_CURR, COL_AWAY_PPG_CURR, COL_XG_H, COL_XG_A, COL_OH, COL_OA]
                   if c not in df.columns]
@@ -411,16 +481,32 @@ with tab_correct:
             oh = safe_float(r.get(COL_OH))
             oa = safe_float(r.get(COL_OA))
 
-            home_goals = round_half_up((hp * hxg) / oh) if all(v is not None for v in [hp, hxg, oh]) and oh > 0 else 0
-            away_goals = round_half_up((ap * axg) / oa) if all(v is not None for v in [ap, axg, oa]) and oa > 0 else 0
+            # Primary model is only meaningful when xG and PPG are actually populated.
+            primary_ok = (
+                all(v is not None and v > 0 for v in [hp, ap, hxg, axg, oh, oa])
+            )
+            if primary_ok:
+                home_goals = round_half_up((hp * hxg) / oh)
+                away_goals = round_half_up((ap * axg) / oa)
+                return max(0, min(10, home_goals)), max(0, min(10, away_goals)), "primary"
 
-            home_goals = max(0, min(10, home_goals))
-            away_goals = max(0, min(10, away_goals))
-            return home_goals, away_goals
+            # Fallback: derive scoreline from odds (no xG / PPG needed).
+            fb = correct_score_from_odds(
+                oh,
+                safe_float(r.get(COL_OD)),
+                oa,
+                safe_float(r.get(COL_OVER25)),
+                safe_float(r.get(COL_UNDER25)),
+            )
+            if fb is not None:
+                return fb[0], fb[1], "odds"
+
+            # No usable inputs at all.
+            return None, None, "none"
 
         rows_cs = []
         for _, r in df.iterrows():
-            hg, ag = compute_correct_score(r)
+            hg, ag, method = compute_correct_score(r)
             date_str, time_str = get_date_time(r, col_dt, col_date, col_time)
             rows_cs.append({
                 "Date": date_str,
@@ -428,8 +514,8 @@ with tab_correct:
                 "Country": str(r.get(COL_COUNTRY)),
                 "League": str(r.get(COL_LEAGUE)),
                 "Home Team": str(r.get(COL_HOME)),
-                "Home Prediction": int(hg),
-                "Away Prediction": int(ag),
+                "Home Prediction": "" if hg is None else int(hg),
+                "Away Prediction": "" if ag is None else int(ag),
                 "Away Team": str(r.get(COL_AWAY)),
             })
 
