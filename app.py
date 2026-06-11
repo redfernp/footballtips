@@ -262,6 +262,8 @@ TOP_AND_SECOND_TIER = TOP_LEAGUES + [
     ("Paraguay", "Division Profesional"),
     # --- International competitions ---
     ("International", "International Friendlies"),
+    ("International", "World Cup"),
+    ("International", "FIFA World Cup"),
     ("International", "WC Qualification Europe"),
     ("International", "WC Qualification Africa"),
     ("International", "WC Qualification Asia"),
@@ -313,6 +315,8 @@ BIG_BETTING_COMPETITIONS = [
     ("Europe", "UEFA U21 Championship Qualification"),
     # All international competitions
     ("International", "International Friendlies"),
+    ("International", "World Cup"),
+    ("International", "FIFA World Cup"),
     ("International", "WC Qualification Europe"),
     ("International", "WC Qualification Africa"),
     ("International", "WC Qualification Asia"),
