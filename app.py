@@ -114,6 +114,71 @@ def correct_score_from_odds(oh, od, oa, o_over, o_under):
     return hg, ag
 
 
+# ----------------------------
+# Correct Score prediction (shared by all tabs for consistent fallbacks)
+# ----------------------------
+CS_COL_HOME_PPG_CURR = "Home Team Points Per Game (Current)"
+CS_COL_AWAY_PPG_CURR = "Away Team Points Per Game (Current)"
+CS_COL_XG_H = "Home Team Pre-Match xG"
+CS_COL_XG_A = "Away Team Pre-Match xG"
+CS_COL_OH = "Odds_Home_Win"
+CS_COL_OD = "Odds_Draw"
+CS_COL_OA = "Odds_Away_Win"
+CS_COL_OVER25 = "Odds_Over25"
+CS_COL_UNDER25 = "Odds_Under25"
+
+
+def predict_correct_score(r):
+    """Return (home_goals, away_goals, method) for a match row.
+
+    method is "primary" (xG x PPG model), "odds" (odds-based fallback), or
+    "none" (no usable inputs -> goals are None). All tabs call this so their
+    fallback tips stay consistent with the displayed correct score.
+    """
+    hp = safe_float(r.get(CS_COL_HOME_PPG_CURR))
+    ap = safe_float(r.get(CS_COL_AWAY_PPG_CURR))
+    hxg = safe_float(r.get(CS_COL_XG_H))
+    axg = safe_float(r.get(CS_COL_XG_A))
+    oh = safe_float(r.get(CS_COL_OH))
+    oa = safe_float(r.get(CS_COL_OA))
+
+    # Primary model is only meaningful when xG and PPG are actually populated.
+    if all(v is not None and v > 0 for v in [hp, ap, hxg, axg, oh, oa]):
+        home_goals = round_half_up((hp * hxg) / oh)
+        away_goals = round_half_up((ap * axg) / oa)
+        return max(0, min(10, home_goals)), max(0, min(10, away_goals)), "primary"
+
+    # Fallback: derive scoreline from odds (no xG / PPG needed).
+    fb = correct_score_from_odds(
+        oh,
+        safe_float(r.get(CS_COL_OD)),
+        oa,
+        safe_float(r.get(CS_COL_OVER25)),
+        safe_float(r.get(CS_COL_UNDER25)),
+    )
+    if fb is not None:
+        return fb[0], fb[1], "odds"
+
+    return None, None, "none"
+
+
+def btts_tip_from_scoreline(hg, ag) -> str:
+    return "YES" if (hg >= 1 and ag >= 1) else "NO"
+
+
+def over_under_tip_from_scoreline(hg, ag, line: float) -> str:
+    """OVER/UNDER for a goals line (e.g. 1.5 or 2.5) from a predicted scoreline."""
+    return "OVER" if (hg + ag) > line else "UNDER"
+
+
+def result_tip_from_scoreline(hg, ag) -> str:
+    if hg > ag:
+        return "HOME WIN"
+    if ag > hg:
+        return "AWAY WIN"
+    return "DRAW"
+
+
 def parse_footystats_date_gmt(value) -> Tuple[str, str]:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return "", ""
@@ -457,56 +522,15 @@ with tab_correct:
         "scoreline derived from Over/Under 2.5 and 1X2 odds."
     )
 
-    COL_HOME_PPG_CURR = "Home Team Points Per Game (Current)"
-    COL_AWAY_PPG_CURR = "Away Team Points Per Game (Current)"
-    COL_XG_H = "Home Team Pre-Match xG"
-    COL_XG_A = "Away Team Pre-Match xG"
-    COL_OH = "Odds_Home_Win"
-    COL_OD = "Odds_Draw"
-    COL_OA = "Odds_Away_Win"
-    COL_OVER25 = "Odds_Over25"
-    COL_UNDER25 = "Odds_Under25"
-
-    cs_missing = [c for c in [COL_HOME_PPG_CURR, COL_AWAY_PPG_CURR, COL_XG_H, COL_XG_A, COL_OH, COL_OA]
+    cs_missing = [c for c in [CS_COL_HOME_PPG_CURR, CS_COL_AWAY_PPG_CURR, CS_COL_XG_H, CS_COL_XG_A, CS_COL_OH, CS_COL_OA]
                   if c not in df.columns]
 
     if cs_missing:
         st.warning(f"Missing columns for Correct Score: {cs_missing}")
     else:
-        def compute_correct_score(r):
-            hp = safe_float(r.get(COL_HOME_PPG_CURR))
-            ap = safe_float(r.get(COL_AWAY_PPG_CURR))
-            hxg = safe_float(r.get(COL_XG_H))
-            axg = safe_float(r.get(COL_XG_A))
-            oh = safe_float(r.get(COL_OH))
-            oa = safe_float(r.get(COL_OA))
-
-            # Primary model is only meaningful when xG and PPG are actually populated.
-            primary_ok = (
-                all(v is not None and v > 0 for v in [hp, ap, hxg, axg, oh, oa])
-            )
-            if primary_ok:
-                home_goals = round_half_up((hp * hxg) / oh)
-                away_goals = round_half_up((ap * axg) / oa)
-                return max(0, min(10, home_goals)), max(0, min(10, away_goals)), "primary"
-
-            # Fallback: derive scoreline from odds (no xG / PPG needed).
-            fb = correct_score_from_odds(
-                oh,
-                safe_float(r.get(COL_OD)),
-                oa,
-                safe_float(r.get(COL_OVER25)),
-                safe_float(r.get(COL_UNDER25)),
-            )
-            if fb is not None:
-                return fb[0], fb[1], "odds"
-
-            # No usable inputs at all.
-            return None, None, "none"
-
         rows_cs = []
         for _, r in df.iterrows():
-            hg, ag, method = compute_correct_score(r)
+            hg, ag, method = predict_correct_score(r)
             date_str, time_str = get_date_time(r, col_dt, col_date, col_time)
             rows_cs.append({
                 "Date": date_str,
@@ -530,7 +554,11 @@ with tab_correct:
 # ============================================================
 with tab_btts:
     st.header("BTTS Tips")
-    st.caption("Formula: BTTS Avg < 35 → NO | 35–64 → NO BET | ≥ 65 → YES")
+    st.caption(
+        "Formula: BTTS Avg < 35 → NO | 35–64 → NO BET | ≥ 65 → YES. "
+        "Fallback when BTTS Average is unavailable: derived from the Correct Score prediction "
+        "(YES if both teams predicted to score)."
+    )
 
     COL_BTTS_AVG = "BTTS Average"
     COL_BTTS_YES_ODDS = "Odds_BTTS_Yes"
@@ -543,8 +571,14 @@ with tab_btts:
     else:
         def compute_btts_tip(r):
             avg = safe_float(r.get(COL_BTTS_AVG))
-            if avg is None:
-                return "NO BET", None
+            if avg is None or avg <= 0:
+                # Fallback: align with the Correct Score prediction.
+                hg, ag, _ = predict_correct_score(r)
+                if hg is None:
+                    return "NO BET", None
+                tip = btts_tip_from_scoreline(hg, ag)
+                odds = safe_float(r.get(COL_BTTS_YES_ODDS)) if tip == "YES" else safe_float(r.get(COL_BTTS_NO_ODDS))
+                return tip, odds
 
             if avg < 35:
                 tip = "NO"
@@ -600,7 +634,11 @@ with tab_btts:
 # ============================================================
 with tab_over15:
     st.header("Over/Under 1.5 Goals Tips")
-    st.caption("Formula: Over15 Avg < 49 → UNDER | 49–69 → NO BET | ≥ 70 → OVER")
+    st.caption(
+        "Formula: Over15 Avg < 49 → UNDER | 49–69 → NO BET | ≥ 70 → OVER. "
+        "Fallback when Over15 Average is unavailable: derived from the Correct Score prediction "
+        "(OVER if predicted total > 1.5)."
+    )
 
     COL_OVER15_AVG = "Over15 Average"
     COL_OVER15_ODDS = "Odds_Over15"
@@ -613,8 +651,14 @@ with tab_over15:
     else:
         def compute_over15_tip(r):
             avg = safe_float(r.get(COL_OVER15_AVG))
-            if avg is None:
-                return "NO BET", None
+            if avg is None or avg <= 0:
+                # Fallback: align with the Correct Score prediction.
+                hg, ag, _ = predict_correct_score(r)
+                if hg is None:
+                    return "NO BET", None
+                tip = over_under_tip_from_scoreline(hg, ag, 1.5)
+                odds = safe_float(r.get(COL_OVER15_ODDS)) if tip == "OVER" else safe_float(r.get(COL_UNDER15_ODDS))
+                return tip, odds
 
             if avg < 49:
                 tip = "UNDER"
@@ -669,7 +713,11 @@ with tab_over15:
 # ============================================================
 with tab_over25:
     st.header("Over/Under 2.5 Goals Tips")
-    st.caption("Formula: Over25 Avg < 35 → UNDER | 35–64 → NO BET | ≥ 65 → OVER")
+    st.caption(
+        "Formula: Over25 Avg < 35 → UNDER | 35–64 → NO BET | ≥ 65 → OVER. "
+        "Fallback when Over25 Average is unavailable: derived from the Correct Score prediction "
+        "(OVER if predicted total > 2.5)."
+    )
 
     COL_OVER25_AVG = "Over25 Average"
     COL_OVER25_ODDS = "Odds_Over25"
@@ -682,8 +730,14 @@ with tab_over25:
     else:
         def compute_over25_tip(r):
             avg = safe_float(r.get(COL_OVER25_AVG))
-            if avg is None:
-                return "NO BET", None
+            if avg is None or avg <= 0:
+                # Fallback: align with the Correct Score prediction.
+                hg, ag, _ = predict_correct_score(r)
+                if hg is None:
+                    return "NO BET", None
+                tip = over_under_tip_from_scoreline(hg, ag, 2.5)
+                odds = safe_float(r.get(COL_OVER25_ODDS)) if tip == "OVER" else safe_float(r.get(COL_UNDER25_ODDS))
+                return tip, odds
 
             if avg < 35:
                 tip = "UNDER"
@@ -738,7 +792,11 @@ with tab_over25:
 # ============================================================
 with tab_1x2:
     st.header("1X2 Tips")
-    st.caption("Formula: Home PPG > 2.4 → HOME WIN | Away PPG > 2.5 → AWAY WIN | Home PPG = Away PPG → DRAW")
+    st.caption(
+        "Formula: Home PPG > 2.4 → HOME WIN | Away PPG > 2.5 → AWAY WIN | Home PPG = Away PPG → DRAW. "
+        "Fallback when Pre-Match PPG is unavailable: derived from the Correct Score prediction "
+        "(winner of the predicted scoreline)."
+    )
 
     COL_HOME_PPG = "Home Team Points Per Game (Pre-Match)"
     COL_AWAY_PPG = "Away Team Points Per Game (Pre-Match)"
@@ -752,8 +810,19 @@ with tab_1x2:
             home_ppg = safe_float(r.get(COL_HOME_PPG))
             away_ppg = safe_float(r.get(COL_AWAY_PPG))
 
-            if home_ppg is None or away_ppg is None:
-                return "NO TIP", None
+            # Fallback when Pre-Match PPG is unavailable (e.g. internationals): align with Correct Score.
+            if home_ppg is None or away_ppg is None or (home_ppg <= 0 and away_ppg <= 0):
+                hg, ag, _ = predict_correct_score(r)
+                if hg is None:
+                    return "NO TIP", None
+                tip = result_tip_from_scoreline(hg, ag)
+                if tip == "HOME WIN":
+                    odds = safe_float(r.get("Odds_Home_Win"))
+                elif tip == "AWAY WIN":
+                    odds = safe_float(r.get("Odds_Away_Win"))
+                else:
+                    odds = safe_float(r.get("Odds_Draw"))
+                return tip, odds
 
             if home_ppg > 2.4:
                 odds = safe_float(r.get("Odds_Home_Win"))
