@@ -482,6 +482,12 @@ elif league_filter == "Top + 2nd Tier Leagues + Internationals":
     # Every national-team competition, so new ones (e.g. Nations League) appear without a list update.
     # FootyStats also files club friendlies under "International", so leave those out.
     mask |= (df[COL_COUNTRY] == "International") & ~df[COL_LEAGUE].astype(str).str.contains("Club", case=False)
+    # No women's or underage (U17, U20, U21, U23 etc.) internationals for now.
+    # Asian Games is an U23 tournament, so it is excluded by name.
+    youth_or_women = r"Women|\bU\d{2}\b|Youth|Asian Games"
+    mask &= ~df[COL_LEAGUE].astype(str).str.contains(youth_or_women, case=False, regex=True)
+    teams_str = df[COL_HOME].astype(str) + " " + df[COL_AWAY].astype(str)
+    mask &= ~((df[COL_COUNTRY] == "International") & teams_str.str.contains(r"\b(?:W|U\d{2})\b", regex=True))
     df = df[mask].reset_index(drop=True)
     if df.empty:
         st.warning("No matches found for selected leagues in this CSV.")
