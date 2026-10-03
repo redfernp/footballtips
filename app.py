@@ -397,6 +397,7 @@ TOP_AND_SECOND_TIER = TOP_LEAGUES + [
     ("International", "WC Qualification Asia"),
     ("International", "WC Qualification CONCACAF"),
     ("International", "Africa Cup of Nations"),
+    ("International", "UEFA Nations League"),
     ("International", "CONCACAF Champions League"),
     ("International", "FIFA World Cup U20"),
     ("Asia", "AFC Champions League"),
@@ -450,6 +451,7 @@ BIG_BETTING_COMPETITIONS = [
     ("International", "WC Qualification Asia"),
     ("International", "WC Qualification CONCACAF"),
     ("International", "Africa Cup of Nations"),
+    ("International", "UEFA Nations League"),
     ("International", "CONCACAF Champions League"),
     ("International", "FIFA World Cup U20"),
     ("Asia", "AFC Champions League"),
@@ -462,7 +464,7 @@ BIG_BETTING_COMPETITIONS = [
 league_filter = st.sidebar.radio(
     "League filter",
     ["All Leagues", "Top Leagues only", "Big Betting Competitions", "Top + 2nd Tier Leagues + Internationals"],
-    index=1,
+    index=3,
 )
 
 if league_filter == "Top Leagues only":
@@ -477,6 +479,9 @@ elif league_filter == "Top + 2nd Tier Leagues + Internationals":
     mask = pd.Series(False, index=df.index)
     for country, league in TOP_AND_SECOND_TIER:
         mask |= (df[COL_COUNTRY] == country) & (df[COL_LEAGUE] == league)
+    # Every national-team competition, so new ones (e.g. Nations League) appear without a list update.
+    # FootyStats also files club friendlies under "International", so leave those out.
+    mask |= (df[COL_COUNTRY] == "International") & ~df[COL_LEAGUE].astype(str).str.contains("Club", case=False)
     df = df[mask].reset_index(drop=True)
     if df.empty:
         st.warning("No matches found for selected leagues in this CSV.")
